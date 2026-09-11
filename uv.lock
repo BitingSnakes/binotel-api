@@ -57,6 +57,10 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+test = [
+    { name = "fastapi" },
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -75,6 +79,10 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.9" },
+]
+test = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "pytest", specifier = ">=8.0" },
 ]
 
 [[package]]

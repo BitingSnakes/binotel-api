@@ -28,11 +28,14 @@ Source = "https://github.com/sashalenz/binotel-api"
 
 [dependency-groups]
 dev = [
-    "fastapi>=0.115",
+    { include-group = "test" },
     "pyright>=1.1",
-    "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.9",
+]
+test = [
+    "fastapi>=0.115",
+    "pytest>=8.0",
 ]
 
 [tool.uv]
