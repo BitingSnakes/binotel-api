@@ -142,12 +142,12 @@ def test_async_throttle_spaces_concurrent_requests() -> None:
 
     async def scenario() -> None:
         async with AsyncBinotelClient(
-            config(throttle_ms=20), http_client=FakeAsyncHttpClient(handler)
+            config(throttle_ms=50), http_client=FakeAsyncHttpClient(handler)
         ) as client:
             await asyncio.gather(client.request("first"), client.request("second"))
 
     asyncio.run(scenario())
-    assert request_times[1] - request_times[0] >= 0.015
+    assert request_times[1] - request_times[0] >= 0.04
 
 
 def test_async_resources_match_sync_public_api() -> None:
