@@ -13,6 +13,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class BinotelConfig:
+    """Configure API transport, authentication, retry, and throttling behavior."""
+
     url: str = "https://api.binotel.com/api/"
     version: str = "4.0"
     response_format: str = "json"
@@ -27,6 +29,7 @@ class BinotelConfig:
 
     @classmethod
     def from_env(cls) -> BinotelConfig:
+        """Create configuration from ``BINOTEL_API_*`` environment variables."""
         defaults = cls()
         return cls(
             url=os.getenv("BINOTEL_API_URL", defaults.url),

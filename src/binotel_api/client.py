@@ -23,15 +23,25 @@ T = TypeVar("T")
 
 
 class HttpResponse(Protocol):
+    """Describe the synchronous response interface required by the client."""
+
     status: Any
 
-    def json(self) -> Any: ...
+    def json(self) -> Any:
+        """Decode and return the JSON response body."""
+        ...
 
 
 class HttpClient(Protocol):
-    def post(self, url: str, **kwargs: Any) -> HttpResponse: ...
+    """Describe an injectable synchronous HTTP transport."""
 
-    def close(self) -> None: ...
+    def post(self, url: str, **kwargs: Any) -> HttpResponse:
+        """Send a POST request and return its response."""
+        ...
+
+    def close(self) -> None:
+        """Release transport resources."""
+        ...
 
 
 _RETRYABLE_WREQ_ERRORS = (
@@ -94,7 +104,7 @@ class _MemoryCache:
 
 
 class BinotelClient:
-    """Client exposing customers, stats, settings, and calls resources."""
+    """Provide synchronous access to Binotel customers, stats, settings, and calls."""
 
     def __init__(
         self,
@@ -130,6 +140,7 @@ class BinotelClient:
         response_key: str | None = None,
         cache_seconds: int | None = None,
     ) -> Any:
+        """Send a request to a Binotel API method and optionally cache its result."""
         params = dict(params or {})
         cache_key = self._cache_key(method, params)
 
@@ -207,9 +218,11 @@ class BinotelClient:
         return status.as_int()
 
     def clear_cache(self) -> None:
+        """Remove every response stored in the in-memory cache."""
         self._cache.clear()
 
     def close(self) -> None:
+        """Release resources owned by the HTTP transport."""
         self._http.close()
 
     def __enter__(self) -> Self:

@@ -22,15 +22,25 @@ T = TypeVar("T")
 
 
 class AsyncHttpResponse(Protocol):
+    """Describe the asynchronous response interface required by the client."""
+
     status: Any
 
-    async def json(self) -> Any: ...
+    async def json(self) -> Any:
+        """Decode and return the JSON response body."""
+        ...
 
 
 class AsyncHttpClient(Protocol):
-    async def post(self, url: str, **kwargs: Any) -> AsyncHttpResponse: ...
+    """Describe an injectable asynchronous HTTP transport."""
 
-    def close(self) -> None: ...
+    async def post(self, url: str, **kwargs: Any) -> AsyncHttpResponse:
+        """Send a POST request and return its response."""
+        ...
+
+    def close(self) -> None:
+        """Release transport resources."""
+        ...
 
 
 _RETRYABLE_WREQ_ERRORS = (
@@ -98,7 +108,7 @@ class _AsyncMemoryCache:
 
 
 class AsyncBinotelClient:
-    """Async client exposing customers, stats, settings, and calls resources."""
+    """Provide asynchronous access to Binotel customers, stats, settings, and calls."""
 
     def __init__(
         self,
@@ -134,6 +144,7 @@ class AsyncBinotelClient:
         response_key: str | None = None,
         cache_seconds: int | None = None,
     ) -> Any:
+        """Send a request to a Binotel API method and optionally cache its result."""
         params = dict(params or {})
         cache_key = self._cache_key(method, params)
 
@@ -211,9 +222,11 @@ class AsyncBinotelClient:
         return status.as_int()
 
     async def clear_cache(self) -> None:
+        """Remove every response stored in the in-memory cache."""
         await self._cache.clear()
 
     def close(self) -> None:
+        """Release resources owned by the HTTP transport."""
         self._http.close()
 
     async def __aenter__(self) -> Self:

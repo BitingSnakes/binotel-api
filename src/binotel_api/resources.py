@@ -109,6 +109,8 @@ def _validate_customer(params: dict[str, Any]) -> None:
 
 
 class BaseResource:
+    """Provide shared request and cache behavior for synchronous resources."""
+
     model: str
 
     def __init__(self, client: BinotelClient) -> None:
@@ -160,12 +162,16 @@ class BaseResource:
 
 
 class Customers(BaseResource):
+    """Provide synchronous access to customer endpoints."""
+
     model = "customers"
 
     def list(self) -> list[CustomerData]:
+        """Return all customers."""
         return self._models("list", CustomerData)
 
     def take_by_id(self, customer_id: int | list[int]) -> list[CustomerData]:
+        """Return customers matching one or more customer IDs."""
         return self._models(
             "take-by-id",
             CustomerData,
@@ -174,6 +180,7 @@ class Customers(BaseResource):
         )
 
     def take_by_label(self, label_id: int) -> list[CustomerData]:
+        """Return customers assigned to a label."""
         return self._models(
             "take-by-label",
             CustomerData,
@@ -182,27 +189,34 @@ class Customers(BaseResource):
         )
 
     def search(self, subject: str) -> list[CustomerData]:
+        """Search customers by a Binotel-supported subject."""
         _require({"subject": subject}, "subject")
         return self._models(
             "search", CustomerData, {"subject": subject}, response_key="customerData"
         )
 
     def create(self, params: dict[str, Any]) -> int:
+        """Create a customer and return its ID."""
         _validate_customer(params)
         return int(self._request("create", params, response_key="customerID"))
 
     def update(self, params: dict[str, Any]) -> None:
+        """Update a customer from the supplied API fields."""
         _validate_customer(params)
         self._request("update", params)
 
     def delete(self, customer_id: int) -> None:
+        """Delete a customer by ID."""
         self._request("delete", {"customerID": customer_id})
 
     def list_of_labels(self) -> list[LabelData]:
+        """Return all available customer labels."""
         return self._models("listOfLabels", LabelData, response_key="listOfLabels")
 
 
 class Stats(BaseResource):
+    """Provide synchronous access to call statistics endpoints."""
+
     model = "stats"
 
     def _stats(
@@ -222,24 +236,29 @@ class Stats(BaseResource):
     def incoming_calls_for_period(
         self, start_time: TimestampLike, stop_time: TimestampLike
     ) -> list[StatData]:
+        """Return incoming calls within an inclusive time period."""
         return self._stats("incoming-calls-for-period", _period(start_time, stop_time))
 
     def outgoing_calls_for_period(
         self, start_time: TimestampLike, stop_time: TimestampLike
     ) -> list[StatData]:
+        """Return outgoing calls within an inclusive time period."""
         return self._stats("outgoing-calls-for-period", _period(start_time, stop_time))
 
     def call_tracking_calls_for_period(
         self, start_time: TimestampLike, stop_time: TimestampLike
     ) -> list[StatData]:
+        """Return call-tracking calls within an inclusive time period."""
         return self._stats("calltracking-calls-for-period", _period(start_time, stop_time))
 
     def all_incoming_calls_since(self, timestamp: TimestampLike) -> list[StatData]:
+        """Return incoming calls recorded since an exact time."""
         return self._stats(
             "all-incoming-calls-since", {"timestamp": _timestamp(timestamp, "timestamp")}
         )
 
     def all_outgoing_calls_since(self, timestamp: TimestampLike) -> list[StatData]:
+        """Return outgoing calls recorded since an exact time."""
         return self._stats(
             "all-outgoing-calls-since", {"timestamp": _timestamp(timestamp, "timestamp")}
         )
@@ -250,6 +269,7 @@ class Stats(BaseResource):
         start_time: TimestampLike,
         stop_time: TimestampLike,
     ) -> list[StatData]:
+        """Return calls for an internal number within a time period."""
         return self._stats(
             "list-of-calls-by-internal-number-for-period",
             {"internalNumber": internal_number, **_period(start_time, stop_time)},
@@ -258,6 +278,7 @@ class Stats(BaseResource):
     def list_of_calls_per_day(
         self, day_in_timestamp: TimestampLike | None = None
     ) -> list[StatData]:
+        """Return calls for the day containing the supplied exact time."""
         params = (
             {}
             if day_in_timestamp is None
@@ -268,15 +289,19 @@ class Stats(BaseResource):
     def list_of_calls_for_period(
         self, start_time: TimestampLike, stop_time: TimestampLike
     ) -> list[StatData]:
+        """Return all calls within an inclusive time period."""
         return self._stats("list-of-calls-for-period", _period(start_time, stop_time))
 
     def list_of_lost_calls_for_today(self) -> list[StatData]:
+        """Return calls lost during the current day."""
         return self._stats("list-of-lost-calls-for-today", cache_seconds=10)
 
     def online_calls(self) -> list[StatData]:
+        """Return calls that are currently active."""
         return self._stats("online-calls", cache_seconds=5)
 
     def history_by_external_number(self, external_numbers: list[str]) -> list[StatData]:
+        """Return call history for one or more external numbers."""
         return self._stats(
             "history-by-external-number",
             {"externalNumbers": external_numbers},
@@ -284,9 +309,11 @@ class Stats(BaseResource):
         )
 
     def history_by_customer_id(self, customer_id: int | list[int]) -> list[StatData]:
+        """Return call history for one or more customer IDs."""
         return self._stats("history-by-customer-id", {"customerID": customer_id}, cache_seconds=5)
 
     def recent_calls_by_internal_number(self, internal_number: int) -> list[StatData]:
+        """Return recent calls for an employee's internal number."""
         return self._stats(
             "recent-calls-by-internal-number",
             {"internalNumber": internal_number},
@@ -294,9 +321,11 @@ class Stats(BaseResource):
         )
 
     def call_details(self, general_call_ids: list[int]) -> list[StatData]:
+        """Return detailed statistics for one or more general call IDs."""
         return self._stats("call-details", {"generalCallID": general_call_ids}, cache_seconds=10)
 
     def call_record(self, general_call_id: int) -> str:
+        """Return the temporary recording URL for a general call ID."""
         value = self._request(
             "call-record",
             {"generalCallID": general_call_id},
@@ -311,9 +340,12 @@ class Stats(BaseResource):
 
 
 class Settings(BaseResource):
+    """Provide synchronous access to PBX settings endpoints."""
+
     model = "settings"
 
     def list_of_employees(self) -> list[SettingsEmployeeData]:
+        """Return configured PBX employees."""
         return self._models(
             "list-of-employees",
             SettingsEmployeeData,
@@ -322,12 +354,14 @@ class Settings(BaseResource):
         )
 
     def list_of_routes(self) -> dict[str, list[SettingsRouteData]]:
+        """Return inbound routes grouped by the API response key."""
         data = self._request("list-of-routes", response_key="listOfRoutes", cache_seconds=5)
         if not isinstance(data, dict):
             raise BinotelRequestError("API returned routes in an unexpected format")
         return {key: _collection(SettingsRouteData, value) for key, value in data.items()}
 
     def list_of_voice_files(self) -> list[SettingsVoiceFileData]:
+        """Return voice files available to call scenarios."""
         result = self._request("list-of-voice-files", cache_seconds=5)
         if not isinstance(result, dict):
             raise BinotelRequestError("API returned voice files in an unexpected format")
@@ -337,9 +371,12 @@ class Settings(BaseResource):
 
 
 class Calls(BaseResource):
+    """Provide synchronous access to call-control endpoints."""
+
     model = "calls"
 
     def internal_number_to_external_number(self, params: dict[str, Any]) -> int | None:
+        """Connect an internal number to an external number."""
         _numeric(params, "internalNumber", required=True)
         _string_size(params, "externalNumber", 10, required=True)
         _string_size(params, "pbxNumber", 10, required=False)
@@ -353,6 +390,7 @@ class Calls(BaseResource):
         )
 
     def external_number_to_external_number(self, params: dict[str, Any]) -> int | None:
+        """Connect two external numbers through the PBX."""
         _string_size(params, "externalNumber1", 10, required=True)
         _string_size(params, "externalNumber2", 10, required=True)
         _string_size(params, "pbxNumber", 10, required=True)
@@ -365,6 +403,7 @@ class Calls(BaseResource):
         )
 
     def external_number_to_incoming_call(self, params: dict[str, Any]) -> int | None:
+        """Connect an external number to an incoming-call scenario."""
         _string_size(params, "externalNumber", 10, required=True)
         _string_size(params, "pbxNumber", 10, required=True)
         _string_size(params, "pbxNumberInExternalCall", 10, required=False)
@@ -373,19 +412,23 @@ class Calls(BaseResource):
         )
 
     def attended_call_transfer(self, general_call_id: int, external_number: str) -> None:
+        """Transfer an active call to an external number with consultation."""
         params = {"generalCallID": general_call_id, "externalNumber": external_number}
         _string_size(params, "externalNumber", 10, required=True)
         self._request("attended-call-transfer", params)
 
     def hangup_call(self, general_call_id: int) -> None:
+        """Terminate an active call."""
         self._request("hangup-call", {"generalCallID": general_call_id})
 
     def call_with_announcement(self, params: dict[str, Any]) -> None:
+        """Place a call that plays a configured voice announcement."""
         _string_size(params, "externalNumber", 10, required=True)
         _numeric(params, "voiceFileID", required=True)
         self._request("call-with-announcement", params)
 
     def call_with_interactive_voice_response(self, params: dict[str, Any]) -> None:
+        """Place a call using an interactive voice-response scenario."""
         _string_size(params, "externalNumber", 10, required=True)
         ivr_name = _require(params, "ivrName")
         if not isinstance(ivr_name, str):

@@ -99,33 +99,47 @@ class WebhookAction(Generic[PayloadT]):
     payload_model: type[PayloadT]
 
     def transform(self, payload: Mapping[str, Any]) -> PayloadT:
+        """Validate a raw webhook mapping as the action's payload model."""
         return self.payload_model.model_validate(payload)
 
     async def handle(self, data: PayloadT) -> dict[str, Any]:
+        """Handle a validated webhook payload and return a JSON response."""
         return {}
 
 
 class ApiCallSettings(WebhookAction[ApiCallSettingsData]):
+    """Handle the ``apiCallSettings`` webhook event."""
+
     payload_model = ApiCallSettingsData
 
 
 class ApiCallCompleted(WebhookAction[ApiCallCompletedData]):
+    """Handle the ``apiCallCompleted`` webhook event."""
+
     payload_model = ApiCallCompletedData
 
 
 class ReceivedTheCall(WebhookAction[ReceivedTheCallData]):
+    """Handle the ``receivedTheCall`` webhook event."""
+
     payload_model = ReceivedTheCallData
 
 
 class AnsweredTheCall(WebhookAction[AnsweredTheCallData]):
+    """Handle the ``answeredTheCall`` webhook event."""
+
     payload_model = AnsweredTheCallData
 
 
 class HangupTheCall(WebhookAction[HangupTheCallData]):
+    """Handle the ``hangupTheCall`` webhook event."""
+
     payload_model = HangupTheCallData
 
 
 class TransferredTheCall(WebhookAction[TransferredTheCallData]):
+    """Handle the ``transferredTheCall`` webhook event."""
+
     payload_model = TransferredTheCallData
 
 
@@ -154,7 +168,6 @@ def create_webhook_router(
     ``trust_forwarded_for`` should only be enabled behind a trusted proxy that
     replaces, rather than appends untrusted values to, ``X-Forwarded-For``.
     """
-
     router = APIRouter(prefix="/binotel-api", tags=["binotel"])
     action_map = dict(DEFAULT_ACTIONS if actions is None else actions)
     settings = WebhookConfig.from_env() if config is None else config

@@ -1,3 +1,6 @@
+"""Exception hierarchy for Binotel client and validation failures."""
+
+
 class BinotelError(Exception):
     """Base exception for this package."""
 

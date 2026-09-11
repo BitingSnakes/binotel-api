@@ -1,7 +1,11 @@
+"""Enumerations used by Binotel API responses."""
+
 from enum import StrEnum
 
 
 class Disposition(StrEnum):
+    """Describe the final or current disposition of a call."""
+
     ANSWER = "ANSWER"
     TRANSFER = "TRANSFER"
     ONLINE = "ONLINE"

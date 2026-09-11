@@ -38,6 +38,7 @@ def parse_phone_number(value: Any) -> str | None:
 
 
 def parse_timestamp(value: Any) -> datetime | None:
+    """Parse Unix or ISO 8601 input into a standard-library datetime."""
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -48,6 +49,8 @@ def parse_timestamp(value: Any) -> datetime | None:
 
 
 class BinotelData(BaseModel):
+    """Provide common aliasing and compatibility behavior for Binotel models."""
+
     model_config = ConfigDict(
         alias_generator=_to_camel,
         populate_by_name=True,
@@ -56,6 +59,8 @@ class BinotelData(BaseModel):
 
 
 class EmployeeData(BinotelData):
+    """Represent an employee embedded in another Binotel response."""
+
     id: int | None = None
     name: str | None = None
     internal_number: str | None = None
@@ -63,11 +68,15 @@ class EmployeeData(BinotelData):
 
 
 class LabelData(BinotelData):
+    """Represent a customer label."""
+
     id: int
     name: str
 
 
 class CustomerData(BinotelData):
+    """Represent a Binotel customer and its associated metadata."""
+
     id: int
     name: str
     description: str | None = None
@@ -78,11 +87,15 @@ class CustomerData(BinotelData):
 
 
 class PbxNumberData(BinotelData):
+    """Represent a public branch exchange number."""
+
     name: str | None = None
     number: str | None = None
 
 
 class CallTrackingData(BinotelData):
+    """Represent marketing attribution associated with a tracked call."""
+
     id: int
     ga_client_id: str
     ga_tracking_id: str
@@ -102,6 +115,8 @@ class CallTrackingData(BinotelData):
 
 
 class GetCallData(BinotelData):
+    """Represent tracking data for a callback request."""
+
     id: int
     ga_client_id: str
     ga_tracking_id: str
@@ -134,6 +149,8 @@ class GetCallData(BinotelData):
 
 
 class HistoryData(BinotelData):
+    """Represent one event in a call's history."""
+
     waitsec: int
     billsec: int
     disposition: str
@@ -143,6 +160,8 @@ class HistoryData(BinotelData):
 
 
 class StatData(BinotelData):
+    """Represent detailed statistics for a Binotel call."""
+
     company_id: int = Field(alias="companyID")
     general_call_id: int = Field(alias="generalCallID")
     call_id: int = Field(alias="callID")
@@ -208,6 +227,8 @@ class StatData(BinotelData):
 
 
 class SettingsEndpointData(BinotelData):
+    """Represent an employee telephony endpoint."""
+
     id: int
     login: str
     password: str
@@ -216,6 +237,8 @@ class SettingsEndpointData(BinotelData):
 
 
 class SettingsEmployeeData(BinotelData):
+    """Represent an employee returned by the settings API."""
+
     employee_id: int = Field(alias="employeeID")
     email: str
     name: str
@@ -240,18 +263,24 @@ class SettingsEmployeeData(BinotelData):
 
 
 class SettingsRouteData(BinotelData):
+    """Represent an inbound call route."""
+
     id: int
     name: str
     description: str
 
 
 class SettingsVoiceFileData(BinotelData):
+    """Represent a voice file available to call scenarios."""
+
     id: int
     name: str
     type: str
 
 
 class AnsweredTheCallData(BinotelData):
+    """Represent an answered-call webhook payload."""
+
     general_call_id: int = Field(alias="generalCallID")
     call_type: int
     company_id: int = Field(alias="companyID")
@@ -267,6 +296,8 @@ class AnsweredTheCallData(BinotelData):
 
 
 class ApiCallSettingsData(BinotelData):
+    """Represent an API call-settings webhook payload."""
+
     request_type: str
     external_number: str
     company_id: int = Field(alias="companyID")
@@ -281,6 +312,8 @@ class ApiCallSettingsData(BinotelData):
 
 
 class ReceivedTheCallData(AnsweredTheCallData):
+    """Represent a received-call webhook payload."""
+
     method: str
     did_number: str | None = None
     did: str | None = None
@@ -288,6 +321,8 @@ class ReceivedTheCallData(AnsweredTheCallData):
 
 
 class HangupTheCallData(BinotelData):
+    """Represent a call-hangup webhook payload."""
+
     general_call_id: int = Field(alias="generalCallID")
     billsec: int
     disposition: str
@@ -296,6 +331,8 @@ class HangupTheCallData(BinotelData):
 
 
 class TransferredTheCallData(BinotelData):
+    """Represent a transferred-call webhook payload."""
+
     internal_number: int
     general_call_id: int = Field(alias="generalCallID")
     company_id: int = Field(alias="companyID")
@@ -303,5 +340,7 @@ class TransferredTheCallData(BinotelData):
 
 
 class ApiCallCompletedData(BinotelData):
+    """Represent a completed API-call webhook payload."""
+
     request_type: str
     call_details: list[Any] | dict[str, Any]
