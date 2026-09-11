@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "binotel-api"
+version = "1.0.0"
+description = "Typed Python client and webhook integration for the Binotel API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE.md" }
+authors = [
+    { name = "Oleksandr Petrovskyi", email = "sashalenz@gmail.com" },
+    { name = "Yehor Smoliakov", email = "egorsmkv@gmail.com" },
+]
+dependencies = [
+    "fastapi>=0.115",
+    "phonenumbers>=8.13",
+    "pydantic>=2.8",
+    "wreq>=0.12.1",
+]
+
+[project.urls]
+Source = "https://github.com/sashalenz/binotel-api"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.9",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/binotel_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
