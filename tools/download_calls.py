@@ -222,6 +222,20 @@ def _append_error(path: Path, day: date, call_id: int, error: Exception) -> None
         output.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _log_recording_unavailable(call_id: int, call: Mapping[str, Any], reason: str) -> None:
+    recording_status = call.get("recordingStatus", call.get("recording_status"))
+    disposition = call.get("disposition")
+    billsec = call.get("billsec")
+    _LOGGER.info(
+        "Call %d: recording unavailable: %s (recordingStatus=%s, disposition=%s, billsec=%s)",
+        call_id,
+        reason,
+        recording_status or "<empty>",
+        disposition or "<empty>",
+        billsec if billsec is not None else "<empty>",
+    )
+
+
 async def _download_call(
     requester: ApiRequester,
     day: date,
@@ -254,6 +268,16 @@ async def _download_call(
             _LOGGER.debug("Call %d: recording already exists", call_id)
             return
 
+        recording_status = call.get("recordingStatus", call.get("recording_status"))
+        if not isinstance(recording_status, str) or recording_status.lower() != "uploaded":
+            counters.recordings_unavailable += 1
+            _log_recording_unavailable(
+                call_id,
+                call,
+                "the call metadata does not mark a recording as uploaded",
+            )
+            return
+
         try:
             record_response = await requester.request(
                 "stats/call-record", {"generalCallID": call_id}
@@ -261,14 +285,31 @@ async def _download_call(
             url = _recording_url(record_response)
             if url is None:
                 counters.recordings_unavailable += 1
-                _LOGGER.debug("Call %d: recording is unavailable", call_id)
+                _log_recording_unavailable(
+                    call_id,
+                    call,
+                    "Binotel returned no recording URL",
+                )
                 return
             destination = await asyncio.to_thread(
                 _download_recording, url, recording_directory, call_id, http_timeout
             )
             counters.recordings_downloaded += 1
             _LOGGER.debug("Call %d: downloaded recording to %s", call_id, destination)
-        except (ApiResponseError, RuntimeError) as exc:
+        except ApiResponseError as exc:
+            if exc.code == 104:
+                counters.recordings_unavailable += 1
+                _log_recording_unavailable(
+                    call_id,
+                    call,
+                    "Binotel rejected the recording lookup with code 104 (no recording exists)",
+                )
+                return
+            counters.recording_errors += 1
+            _LOGGER.warning("Call %d: %s", call_id, exc)
+            async with error_lock:
+                await asyncio.to_thread(_append_error, output / "errors.jsonl", day, call_id, exc)
+        except RuntimeError as exc:
             counters.recording_errors += 1
             _LOGGER.warning("Call %d: %s", call_id, exc)
             async with error_lock:
