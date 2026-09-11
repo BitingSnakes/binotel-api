@@ -50,11 +50,15 @@ Configuration can also be supplied directly with `BinotelConfig`.
 ## API usage
 
 ```python
+from whenever import ZonedDateTime
+
 from binotel_api import Binotel
+
+start = ZonedDateTime(2024, 9, 9, tz="Europe/Kyiv")
 
 with Binotel() as binotel:
     customers = binotel.customers.list()
-    calls = binotel.stats.incoming_calls_for_period(1_725_840_000, 1_725_926_400)
+    calls = binotel.stats.incoming_calls_for_period(start, start.add(days=1))
 
 for customer in customers:
     print(customer.id, customer.name)
@@ -89,6 +93,12 @@ The client provides four resource groups:
 Method names are Pythonic `snake_case`; outbound Binotel parameters remain in
 their documented `camelCase` format. Responses are Pydantic models from
 `binotel_api.schemas`.
+
+All stats methods that take timestamps accept whenever `Instant`,
+`ZonedDateTime`, and `OffsetDateTime` values. Integer Unix timestamps remain
+supported for compatibility. A `PlainDateTime` is intentionally not accepted
+because it does not identify an unambiguous moment until a timezone or offset is
+assigned.
 
 ## Original source
 

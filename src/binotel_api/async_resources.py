@@ -24,6 +24,7 @@ from .schemas import (
     SettingsVoiceFileData,
     StatData,
 )
+from .timestamps import TimestampLike, _period, _timestamp
 
 if TYPE_CHECKING:
     from .async_client import AsyncBinotelClient
@@ -140,48 +141,56 @@ class AsyncStats(AsyncBaseResource):
             cache_seconds=cache_seconds,
         )
 
-    async def incoming_calls_for_period(self, start_time: int, stop_time: int) -> list[StatData]:
-        return await self._stats(
-            "incoming-calls-for-period", {"startTime": start_time, "stopTime": stop_time}
-        )
+    async def incoming_calls_for_period(
+        self, start_time: TimestampLike, stop_time: TimestampLike
+    ) -> list[StatData]:
+        return await self._stats("incoming-calls-for-period", _period(start_time, stop_time))
 
-    async def outgoing_calls_for_period(self, start_time: int, stop_time: int) -> list[StatData]:
-        return await self._stats(
-            "outgoing-calls-for-period", {"startTime": start_time, "stopTime": stop_time}
-        )
+    async def outgoing_calls_for_period(
+        self, start_time: TimestampLike, stop_time: TimestampLike
+    ) -> list[StatData]:
+        return await self._stats("outgoing-calls-for-period", _period(start_time, stop_time))
 
     async def call_tracking_calls_for_period(
-        self, start_time: int, stop_time: int
+        self, start_time: TimestampLike, stop_time: TimestampLike
     ) -> list[StatData]:
+        return await self._stats("calltracking-calls-for-period", _period(start_time, stop_time))
+
+    async def all_incoming_calls_since(self, timestamp: TimestampLike) -> list[StatData]:
         return await self._stats(
-            "calltracking-calls-for-period", {"startTime": start_time, "stopTime": stop_time}
+            "all-incoming-calls-since", {"timestamp": _timestamp(timestamp, "timestamp")}
         )
 
-    async def all_incoming_calls_since(self, timestamp: int) -> list[StatData]:
-        return await self._stats("all-incoming-calls-since", {"timestamp": timestamp})
-
-    async def all_outgoing_calls_since(self, timestamp: int) -> list[StatData]:
-        return await self._stats("all-outgoing-calls-since", {"timestamp": timestamp})
+    async def all_outgoing_calls_since(self, timestamp: TimestampLike) -> list[StatData]:
+        return await self._stats(
+            "all-outgoing-calls-since", {"timestamp": _timestamp(timestamp, "timestamp")}
+        )
 
     async def list_of_calls_by_internal_number_for_period(
-        self, internal_number: int, start_time: int, stop_time: int
+        self,
+        internal_number: int,
+        start_time: TimestampLike,
+        stop_time: TimestampLike,
     ) -> list[StatData]:
         return await self._stats(
             "list-of-calls-by-internal-number-for-period",
-            {
-                "internalNumber": internal_number,
-                "startTime": start_time,
-                "stopTime": stop_time,
-            },
+            {"internalNumber": internal_number, **_period(start_time, stop_time)},
         )
 
-    async def list_of_calls_per_day(self, day_in_timestamp: int | None = None) -> list[StatData]:
-        return await self._stats("list-of-calls-per-day", {"dayInTimestamp": day_in_timestamp})
-
-    async def list_of_calls_for_period(self, start_time: int, stop_time: int) -> list[StatData]:
-        return await self._stats(
-            "list-of-calls-for-period", {"startTime": start_time, "stopTime": stop_time}
+    async def list_of_calls_per_day(
+        self, day_in_timestamp: TimestampLike | None = None
+    ) -> list[StatData]:
+        params = (
+            {}
+            if day_in_timestamp is None
+            else {"dayInTimestamp": _timestamp(day_in_timestamp, "day_in_timestamp")}
         )
+        return await self._stats("list-of-calls-per-day", params)
+
+    async def list_of_calls_for_period(
+        self, start_time: TimestampLike, stop_time: TimestampLike
+    ) -> list[StatData]:
+        return await self._stats("list-of-calls-for-period", _period(start_time, stop_time))
 
     async def list_of_lost_calls_for_today(self) -> list[StatData]:
         return await self._stats("list-of-lost-calls-for-today", cache_seconds=10)

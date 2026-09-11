@@ -16,6 +16,7 @@ authors = [
 dependencies = [
     "phonenumbers>=8.13",
     "pydantic>=2.8",
+    "whenever>=0.10.5",
     "wreq>=0.12.1",
 ]
 

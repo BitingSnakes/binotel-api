@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import pytest
+from whenever import Instant, OffsetDateTime, PlainDateTime, ZonedDateTime
 
 from binotel_api import BinotelClient, BinotelConfig, BinotelRequestError
 from binotel_api.exceptions import BinotelValidationError
@@ -193,6 +194,59 @@ def test_retries_transient_status() -> None:
         assert client.customers.list() == []
 
     assert requests == 2
+
+
+def test_stats_accept_whenever_times_and_send_unix_timestamps() -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeResponse:
+        payloads.append(
+            {key: value for key, value in payload.items() if key not in {"key", "secret"}}
+        )
+        return FakeResponse(200, {"callDetails": []})
+
+    start = ZonedDateTime(2024, 9, 9, tz="Europe/Kyiv")
+    stop = start.add(days=1)
+    instant = Instant.from_utc(2024, 9, 9)
+    offset = OffsetDateTime(2024, 9, 9, offset=3)
+    offset_stop = OffsetDateTime(2024, 9, 9, hour=1, offset=3)
+
+    with BinotelClient(config(), http_client=FakeHttpClient(handler)) as client:
+        client.stats.incoming_calls_for_period(start, stop)
+        client.stats.outgoing_calls_for_period(instant, instant.add(hours=1))
+        client.stats.call_tracking_calls_for_period(offset, offset_stop)
+        client.stats.all_incoming_calls_since(instant)
+        client.stats.all_outgoing_calls_since(start)
+        client.stats.list_of_calls_by_internal_number_for_period(801, start, stop)
+        client.stats.list_of_calls_per_day(start)
+        client.stats.list_of_calls_for_period(1_725_840_000, 1_725_926_400)
+
+    assert payloads == [
+        {"startTime": start.timestamp(), "stopTime": stop.timestamp()},
+        {"startTime": instant.timestamp(), "stopTime": instant.add(hours=1).timestamp()},
+        {"startTime": offset.timestamp(), "stopTime": offset_stop.timestamp()},
+        {"timestamp": instant.timestamp()},
+        {"timestamp": start.timestamp()},
+        {
+            "internalNumber": 801,
+            "startTime": start.timestamp(),
+            "stopTime": stop.timestamp(),
+        },
+        {"dayInTimestamp": start.timestamp()},
+        {"startTime": 1_725_840_000, "stopTime": 1_725_926_400},
+    ]
+
+
+def test_stats_reject_ambiguous_or_reversed_times() -> None:
+    fake = FakeHttpClient(lambda _url, _payload: FakeResponse(200, {"callDetails": []}))
+    start = Instant.from_utc(2024, 9, 10)
+    stop = Instant.from_utc(2024, 9, 9)
+
+    with BinotelClient(config(), http_client=fake) as client:
+        with pytest.raises(BinotelValidationError, match="must not be earlier"):
+            client.stats.incoming_calls_for_period(start, stop)
+        with pytest.raises(BinotelValidationError, match="exact time"):
+            client.stats.all_incoming_calls_since(PlainDateTime(2024, 9, 9))  # type: ignore[arg-type]
 
 
 def test_every_resource_method_maps_to_an_api_endpoint() -> None:

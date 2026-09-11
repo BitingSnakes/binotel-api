@@ -7,6 +7,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from whenever import ZonedDateTime
+
 from binotel_api import AsyncBinotelClient, BinotelConfig
 from binotel_api.async_resources import AsyncCalls, AsyncCustomers, AsyncSettings, AsyncStats
 from binotel_api.resources import Calls, Customers, Settings, Stats
@@ -148,6 +150,31 @@ def test_async_throttle_spaces_concurrent_requests() -> None:
 
     asyncio.run(scenario())
     assert request_times[1] - request_times[0] >= 0.04
+
+
+def test_async_stats_accept_whenever_times() -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeAsyncResponse:
+        payloads.append(payload)
+        return FakeAsyncResponse(200, {"callDetails": []})
+
+    async def scenario() -> None:
+        start = ZonedDateTime(2024, 9, 9, tz="Europe/Kyiv")
+        stop = start.add(days=1)
+        async with AsyncBinotelClient(config(), http_client=FakeAsyncHttpClient(handler)) as client:
+            await client.stats.incoming_calls_for_period(start, stop)
+
+        assert payloads == [
+            {
+                "startTime": start.timestamp(),
+                "stopTime": stop.timestamp(),
+                "key": "api-key",
+                "secret": "api-secret",
+            }
+        ]
+
+    asyncio.run(scenario())
 
 
 def test_async_resources_match_sync_public_api() -> None:
