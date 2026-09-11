@@ -35,6 +35,7 @@ from binotel_api import AsyncBinotel, BinotelConfig
 
 _RATE_LIMIT_CODE = 106
 _MAX_API_WINDOW_SECONDS = 24 * 60 * 60
+_HISTORY_MARKER = ".history-complete.json"
 _LOGGER = logging.getLogger("binotel-downloader")
 _CONTENT_TYPE_SUFFIXES = {
     "audio/mpeg": ".mp3",
@@ -178,6 +179,47 @@ def _atomic_json_write(path: Path, value: Any) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _load_cached_calls(directory: Path) -> tuple[list[dict[str, Any]], str] | None:
+    marker_path = directory / _HISTORY_MARKER
+    try:
+        if marker_path.is_file():
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            call_ids = marker.get("generalCallIDs") if isinstance(marker, dict) else None
+            if not isinstance(call_ids, list) or not all(
+                isinstance(call_id, int) for call_id in call_ids
+            ):
+                _LOGGER.warning("Ignoring invalid history checkpoint: %s", marker_path)
+                return None
+            paths = [directory / f"{call_id}.json" for call_id in call_ids]
+            if not all(path.is_file() for path in paths):
+                _LOGGER.warning(
+                    "History checkpoint for %s references missing metadata; refreshing from API",
+                    directory.name,
+                )
+                return None
+            return [json.loads(path.read_text(encoding="utf-8")) for path in paths], "checkpoint"
+
+        paths = sorted(path for path in directory.glob("*.json") if path.stem.isdecimal())
+        if paths:
+            calls = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+            if not all(isinstance(call, dict) for call in calls):
+                _LOGGER.warning("Ignoring invalid cached metadata in %s", directory)
+                return None
+            return calls, "existing metadata"
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        _LOGGER.warning("Could not read cached history from %s: %s", directory, exc)
+    return None
+
+
+def _history_marker(day: date, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "date": day.isoformat(),
+        "callCount": len(calls),
+        "generalCallIDs": [_call_id(call) for call in calls],
+        "completedAt": datetime.now().astimezone().isoformat(),
+    }
 
 
 def _recording_url(response: Mapping[str, Any]) -> str | None:
@@ -401,24 +443,39 @@ async def _download_day(
     overwrite: bool,
     http_timeout: int,
     progress_every: int,
+    refresh_history: bool,
     seen: set[int],
 ) -> None:
-    _LOGGER.info("Fetching calls for %s", day.isoformat())
-    windows = _day_windows(day, timezone)
-    if len(windows) > 1:
-        _LOGGER.info(
-            "%s spans more than 24 hours because of a timezone transition; "
-            "splitting it into %d API requests",
-            day.isoformat(),
-            len(windows),
-        )
+    day_directory = output / day.isoformat()
+    cached = None
+    if not refresh_history:
+        cached = await asyncio.to_thread(_load_cached_calls, day_directory)
+
     calls: list[dict[str, Any]] = []
-    for start_time, stop_time in windows:
-        response = await requester.request(
-            "stats/list-of-calls-for-period",
-            {"startTime": start_time, "stopTime": stop_time},
+    if cached is not None:
+        calls, cache_source = cached
+        _LOGGER.info(
+            "%s: using %d calls from %s; skipping call-history API request",
+            day.isoformat(),
+            len(calls),
+            cache_source,
         )
-        calls.extend(_call_details(response))
+    else:
+        _LOGGER.info("Fetching calls for %s", day.isoformat())
+        windows = _day_windows(day, timezone)
+        if len(windows) > 1:
+            _LOGGER.info(
+                "%s spans more than 24 hours because of a timezone transition; "
+                "splitting it into %d API requests",
+                day.isoformat(),
+                len(windows),
+            )
+        for start_time, stop_time in windows:
+            response = await requester.request(
+                "stats/list-of-calls-for-period",
+                {"startTime": start_time, "stopTime": stop_time},
+            )
+            calls.extend(_call_details(response))
     unique_calls: list[dict[str, Any]] = []
     for call in calls:
         call_id = _call_id(call)
@@ -458,6 +515,12 @@ async def _download_day(
                 counters.recordings_unavailable,
                 counters.recording_errors,
             )
+    await asyncio.to_thread(
+        _atomic_json_write,
+        day_directory / _HISTORY_MARKER,
+        _history_marker(day, unique_calls),
+    )
+    _LOGGER.debug("%s: wrote completed-day checkpoint", day.isoformat())
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -497,6 +560,11 @@ def _parser() -> argparse.ArgumentParser:
         "--overwrite",
         action="store_true",
         help="replace existing metadata and recording files",
+    )
+    parser.add_argument(
+        "--refresh-history",
+        action="store_true",
+        help="ignore local day checkpoints and fetch call history again",
     )
     parser.add_argument(
         "--api-delay",
@@ -581,12 +649,14 @@ async def _async_main(args: argparse.Namespace) -> int:
 
     started_at = datetime.now().astimezone()
     _LOGGER.info(
-        "Starting download: %s through %s, output=%s, concurrency=%d, metadata_only=%s",
+        "Starting download: %s through %s, output=%s, concurrency=%d, "
+        "metadata_only=%s, refresh_history=%s",
         args.start,
         end,
         output,
         args.concurrency,
         args.metadata_only,
+        args.refresh_history,
     )
     async with AsyncBinotel(config) as client:
         requester = ApiRequester(client, args.api_delay)
@@ -604,6 +674,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                     overwrite=args.overwrite,
                     http_timeout=args.timeout,
                     progress_every=args.progress_every,
+                    refresh_history=args.refresh_history,
                     seen=seen,
                 )
                 counters.days_completed += 1
@@ -630,6 +701,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         "endDate": end.isoformat(),
         "timezone": str(timezone),
         "metadataOnly": args.metadata_only,
+        "refreshHistory": args.refresh_history,
         "concurrency": args.concurrency,
         "startedAt": started_at.isoformat(),
         "finishedAt": datetime.now().astimezone().isoformat(),
