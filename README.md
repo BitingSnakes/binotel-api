@@ -1,12 +1,18 @@
 # Binotel API for Python
 
-A typed synchronous and asynchronous Python client for Binotel API 4.0 with
-FastAPI webhook routing.
+A typed synchronous and asynchronous Python client for Binotel API 4.0, with
+optional FastAPI webhook routing.
 
 ## Installation
 
 ```bash
 pip install .
+```
+
+Install the optional FastAPI webhook integration with:
+
+```bash
+pip install ".[webhooks]"
 ```
 
 For development:
@@ -90,6 +96,8 @@ This Python implementation was developed from
 [sashalenz/binotel-api](https://github.com/sashalenz/binotel-api).
 
 ## FastAPI webhooks
+
+This section requires the `webhooks` installation extra shown above.
 
 ```python
 from fastapi import FastAPI

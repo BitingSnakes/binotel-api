@@ -14,17 +14,20 @@ authors = [
     { name = "Yehor Smoliakov", email = "egorsmkv@gmail.com" },
 ]
 dependencies = [
-    "fastapi>=0.115",
     "phonenumbers>=8.13",
     "pydantic>=2.8",
     "wreq>=0.12.1",
 ]
+
+[project.optional-dependencies]
+webhooks = ["fastapi>=0.115"]
 
 [project.urls]
 Source = "https://github.com/sashalenz/binotel-api"
 
 [dependency-groups]
 dev = [
+    "fastapi>=0.115",
     "pyright>=1.1",
     "pytest>=8.0",
     "pytest-cov>=5.0",

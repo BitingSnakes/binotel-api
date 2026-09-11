@@ -38,14 +38,19 @@ name = "binotel-api"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastapi" },
     { name = "phonenumbers" },
     { name = "pydantic" },
     { name = "wreq" },
 ]
 
+[package.optional-dependencies]
+webhooks = [
+    { name = "fastapi" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "fastapi" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -54,14 +59,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'webhooks'", specifier = ">=0.115" },
     { name = "phonenumbers", specifier = ">=8.13" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "wreq", specifier = ">=0.12.1" },
 ]
+provides-extras = ["webhooks"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
