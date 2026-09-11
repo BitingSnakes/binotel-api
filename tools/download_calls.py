@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from binotel_api import AsyncBinotel, BinotelConfig
 
 _RATE_LIMIT_CODE = 106
+_MAX_API_WINDOW_SECONDS = 24 * 60 * 60
 _LOGGER = logging.getLogger("binotel-downloader")
 _CONTENT_TYPE_SUFFIXES = {
     "audio/mpeg": ".mp3",
@@ -63,6 +64,9 @@ class Counters:
     recordings_existing: int = 0
     recordings_unavailable: int = 0
     recording_errors: int = 0
+    call_errors: int = 0
+    days_completed: int = 0
+    days_failed: int = 0
 
 
 class ApiRequester:
@@ -134,10 +138,17 @@ def _date_range(start: date, end: date) -> Iterator[date]:
         current += timedelta(days=1)
 
 
-def _day_timestamps(day: date, timezone: ZoneInfo) -> tuple[int, int]:
+def _day_windows(day: date, timezone: ZoneInfo) -> list[tuple[int, int]]:
     start = datetime.combine(day, datetime_time.min, timezone)
     stop = datetime.combine(day + timedelta(days=1), datetime_time.min, timezone)
-    return int(start.timestamp()), int(stop.timestamp()) - 1
+    cursor = int(start.timestamp())
+    stop_exclusive = int(stop.timestamp())
+    windows: list[tuple[int, int]] = []
+    while cursor < stop_exclusive:
+        chunk_stop_exclusive = min(cursor + _MAX_API_WINDOW_SECONDS, stop_exclusive)
+        windows.append((cursor, chunk_stop_exclusive - 1))
+        cursor = chunk_stop_exclusive
+    return windows
 
 
 def _call_details(response: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -210,11 +221,23 @@ def _download_recording(url: str, directory: Path, call_id: int, timeout: int) -
         raise RuntimeError(f"recording download failed: {exc}") from exc
 
 
-def _append_error(path: Path, day: date, call_id: int, error: Exception) -> None:
+def _append_error(path: Path, day: date, call_id: int | None, error: Exception) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "date": day.isoformat(),
         "generalCallID": call_id,
+        "error": str(error),
+        "loggedAt": datetime.now().astimezone().isoformat(),
+    }
+    with path.open("a", encoding="utf-8") as output:
+        output.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _append_day_error(path: Path, day: date, error: Exception) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "date": day.isoformat(),
+        "stage": "call-history",
         "error": str(error),
         "loggedAt": datetime.now().astimezone().isoformat(),
     }
@@ -316,6 +339,55 @@ async def _download_call(
                 await asyncio.to_thread(_append_error, output / "errors.jsonl", day, call_id, exc)
 
 
+async def _download_call_safely(
+    requester: ApiRequester,
+    day: date,
+    call: dict[str, Any],
+    output: Path,
+    counters: Counters,
+    semaphore: asyncio.Semaphore,
+    error_lock: asyncio.Lock,
+    *,
+    metadata_only: bool,
+    overwrite: bool,
+    http_timeout: int,
+) -> None:
+    """Process one call without allowing it to terminate the export."""
+    try:
+        await _download_call(
+            requester,
+            day,
+            call,
+            output,
+            counters,
+            semaphore,
+            error_lock,
+            metadata_only=metadata_only,
+            overwrite=overwrite,
+            http_timeout=http_timeout,
+        )
+    except Exception as exc:
+        call_id = _optional_int(call.get("generalCallID", call.get("general_call_id")))
+        counters.call_errors += 1
+        _LOGGER.error(
+            "Call %s: processing failed but the export will continue: %s",
+            call_id if call_id is not None else "<unknown>",
+            exc,
+        )
+        _LOGGER.debug("Unexpected call-processing failure", exc_info=True)
+        async with error_lock:
+            try:
+                await asyncio.to_thread(
+                    _append_error,
+                    output / "errors.jsonl",
+                    day,
+                    call_id,
+                    exc,
+                )
+            except OSError as log_error:
+                _LOGGER.error("Could not write call error log: %s", log_error)
+
+
 async def _download_day(
     requester: ApiRequester,
     day: date,
@@ -332,12 +404,21 @@ async def _download_day(
     seen: set[int],
 ) -> None:
     _LOGGER.info("Fetching calls for %s", day.isoformat())
-    start_time, stop_time = _day_timestamps(day, timezone)
-    response = await requester.request(
-        "stats/list-of-calls-for-period",
-        {"startTime": start_time, "stopTime": stop_time},
-    )
-    calls = _call_details(response)
+    windows = _day_windows(day, timezone)
+    if len(windows) > 1:
+        _LOGGER.info(
+            "%s spans more than 24 hours because of a timezone transition; "
+            "splitting it into %d API requests",
+            day.isoformat(),
+            len(windows),
+        )
+    calls: list[dict[str, Any]] = []
+    for start_time, stop_time in windows:
+        response = await requester.request(
+            "stats/list-of-calls-for-period",
+            {"startTime": start_time, "stopTime": stop_time},
+        )
+        calls.extend(_call_details(response))
     unique_calls: list[dict[str, Any]] = []
     for call in calls:
         call_id = _call_id(call)
@@ -349,7 +430,7 @@ async def _download_day(
 
     tasks = [
         asyncio.create_task(
-            _download_call(
+            _download_call_safely(
                 requester,
                 day,
                 call,
@@ -510,20 +591,39 @@ async def _async_main(args: argparse.Namespace) -> int:
     async with AsyncBinotel(config) as client:
         requester = ApiRequester(client, args.api_delay)
         for day in _date_range(args.start, end):
-            await _download_day(
-                requester,
-                day,
-                timezone,
-                output,
-                counters,
-                semaphore,
-                error_lock,
-                metadata_only=args.metadata_only,
-                overwrite=args.overwrite,
-                http_timeout=args.timeout,
-                progress_every=args.progress_every,
-                seen=seen,
-            )
+            try:
+                await _download_day(
+                    requester,
+                    day,
+                    timezone,
+                    output,
+                    counters,
+                    semaphore,
+                    error_lock,
+                    metadata_only=args.metadata_only,
+                    overwrite=args.overwrite,
+                    http_timeout=args.timeout,
+                    progress_every=args.progress_every,
+                    seen=seen,
+                )
+                counters.days_completed += 1
+            except Exception as exc:
+                counters.days_failed += 1
+                _LOGGER.error(
+                    "%s: call history failed but the export will continue with the next day: %s",
+                    day.isoformat(),
+                    exc,
+                )
+                _LOGGER.debug("Unexpected day-processing failure", exc_info=True)
+                try:
+                    await asyncio.to_thread(
+                        _append_day_error,
+                        output / "errors.jsonl",
+                        day,
+                        exc,
+                    )
+                except OSError as log_error:
+                    _LOGGER.error("Could not write day error log: %s", log_error)
 
     manifest = {
         "startDate": args.start.isoformat(),
@@ -537,13 +637,17 @@ async def _async_main(args: argparse.Namespace) -> int:
     }
     await asyncio.to_thread(_atomic_json_write, output / "manifest.json", manifest)
     _LOGGER.info(
-        "Finished: calls=%d, metadata=%d, downloaded=%d, existing=%d, unavailable=%d, errors=%d",
+        "Finished: days=%d completed/%d failed, calls=%d, metadata=%d, "
+        "downloaded=%d, existing=%d, unavailable=%d, recording_errors=%d, call_errors=%d",
+        counters.days_completed,
+        counters.days_failed,
         counters.calls_found,
         counters.metadata_written,
         counters.recordings_downloaded,
         counters.recordings_existing,
         counters.recordings_unavailable,
         counters.recording_errors,
+        counters.call_errors,
     )
     _LOGGER.debug("Manifest:\n%s", json.dumps(manifest, indent=2))
     return 0
