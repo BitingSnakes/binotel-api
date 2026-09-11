@@ -1,5 +1,7 @@
 # Binotel API for Python
 
+[![Tests](https://github.com/BitingSnakes/binotel-api/actions/workflows/test.yml/badge.svg)](https://github.com/BitingSnakes/binotel-api/actions/workflows/test.yml)
+
 A typed synchronous and asynchronous Python client for Binotel API 4.0, with
 optional FastAPI webhook routing.
 
