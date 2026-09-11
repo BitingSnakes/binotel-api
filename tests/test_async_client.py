@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -30,6 +31,9 @@ class FakeAsyncHttpClient:
 
     def close(self) -> None:
         self.closed = True
+
+    def __bool__(self) -> bool:
+        return False
 
 
 def config(**overrides: object) -> BinotelConfig:
@@ -78,6 +82,72 @@ def test_async_cache_coalesces_concurrent_requests() -> None:
 
     asyncio.run(scenario())
     assert requests == 1
+
+
+def test_async_cache_does_not_serialize_different_keys() -> None:
+    class ConcurrentHttpClient:
+        def __init__(self) -> None:
+            self.started = 0
+            self.both_started = asyncio.Event()
+
+        async def post(self, url: str, **kwargs: Any) -> FakeAsyncResponse:
+            self.started += 1
+            if self.started == 2:
+                self.both_started.set()
+            await self.both_started.wait()
+            return FakeAsyncResponse(200, {})
+
+        def close(self) -> None:
+            pass
+
+    async def scenario() -> None:
+        transport = ConcurrentHttpClient()
+        async with AsyncBinotelClient(config(), http_client=transport) as client:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    client.request("first", cache_seconds=10),
+                    client.request("second", cache_seconds=10),
+                ),
+                timeout=1,
+            )
+        assert results == [{}, {}]
+
+    asyncio.run(scenario())
+
+
+def test_async_custom_cache_duration_overrides_endpoint_default() -> None:
+    requests = 0
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeAsyncResponse:
+        nonlocal requests
+        requests += 1
+        return FakeAsyncResponse(200, {"callDetails": []})
+
+    async def scenario() -> None:
+        async with AsyncBinotelClient(config(), http_client=FakeAsyncHttpClient(handler)) as client:
+            stats = client.stats.cache(0)
+            assert await stats.online_calls() == []
+            assert await stats.online_calls() == []
+
+    asyncio.run(scenario())
+    assert requests == 2
+
+
+def test_async_throttle_spaces_concurrent_requests() -> None:
+    request_times: list[float] = []
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeAsyncResponse:
+        request_times.append(time.monotonic())
+        return FakeAsyncResponse(200, {})
+
+    async def scenario() -> None:
+        async with AsyncBinotelClient(
+            config(throttle_ms=20), http_client=FakeAsyncHttpClient(handler)
+        ) as client:
+            await asyncio.gather(client.request("first"), client.request("second"))
+
+    asyncio.run(scenario())
+    assert request_times[1] - request_times[0] >= 0.015
 
 
 def test_async_resources_match_sync_public_api() -> None:

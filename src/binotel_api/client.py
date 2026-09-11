@@ -9,7 +9,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Protocol, TypeVar
+from http import HTTPStatus
+from typing import Any, Protocol, Self, TypeVar
 
 import wreq
 from wreq.blocking import Client as WreqClient
@@ -61,19 +62,31 @@ class _MemoryCache:
     def __init__(self) -> None:
         self._items: dict[str, _CacheEntry] = {}
         self._lock = threading.Lock()
+        self._key_locks: dict[str, threading.Lock] = {}
 
     def get_or_set(self, key: str, ttl: int, factory: Callable[[], T]) -> T:
-        now = time.monotonic()
         with self._lock:
-            entry = self._items.get(key)
-            if entry is not None and (entry.expires_at is None or entry.expires_at > now):
+            if (entry := self._get(key)) is not None:
                 return entry.value
+            key_lock = self._key_locks.setdefault(key, threading.Lock())
 
-        value = factory()
-        expires_at = None if ttl == -1 else now + ttl
-        with self._lock:
-            self._items[key] = _CacheEntry(value, expires_at)
-        return value
+        with key_lock:
+            with self._lock:
+                if (entry := self._get(key)) is not None:
+                    return entry.value
+
+            value = factory()
+            expires_at = None if ttl == -1 else time.monotonic() + ttl
+            with self._lock:
+                self._items[key] = _CacheEntry(value, expires_at)
+            return value
+
+    def _get(self, key: str) -> _CacheEntry | None:
+        entry = self._items.get(key)
+        if entry is not None and (entry.expires_at is None or entry.expires_at > time.monotonic()):
+            return entry
+        self._items.pop(key, None)
+        return None
 
     def clear(self) -> None:
         with self._lock:
@@ -89,16 +102,20 @@ class BinotelClient:
         *,
         http_client: HttpClient | None = None,
     ) -> None:
-        self.config = config or BinotelConfig.from_env()
+        self.config = config if config is not None else BinotelConfig.from_env()
         self._base_url = self.config.url.rstrip("/")
-        self._http: HttpClient = http_client or WreqClient(
-            timeout=timedelta(seconds=self.config.timeout),
-            connect_timeout=timedelta(seconds=self.config.connect_timeout),
-            headers={"Accept": "application/json"},
+        self._http: HttpClient = (
+            http_client
+            if http_client is not None
+            else WreqClient(
+                timeout=timedelta(seconds=self.config.timeout),
+                connect_timeout=timedelta(seconds=self.config.connect_timeout),
+                headers={"Accept": "application/json"},
+            )
         )
         self._cache = _MemoryCache()
-        self._request_lock = threading.Lock()
-        self._last_request_at: float | None = None
+        self._throttle_lock = threading.Lock()
+        self._next_request_at = 0.0
 
         self.customers = Customers(self)
         self.stats = Stats(self)
@@ -138,11 +155,13 @@ class BinotelClient:
             try:
                 response = self._http.post(url, json=payload)
                 status = self._status_code(response)
-                if status == 429 or status >= 500:
-                    if attempt < attempts:
-                        self._retry_sleep(attempt)
-                        continue
-                if status >= 400:
+                if (
+                    status == HTTPStatus.TOO_MANY_REQUESTS
+                    or status >= HTTPStatus.INTERNAL_SERVER_ERROR
+                ) and attempt < attempts:
+                    self._retry_sleep(attempt)
+                    continue
+                if status >= HTTPStatus.BAD_REQUEST:
                     raise BinotelRequestError(f"API request failed with HTTP status {status}")
                 return response.json()
             except _RETRYABLE_WREQ_ERRORS as exc:
@@ -156,22 +175,17 @@ class BinotelClient:
                 raise BinotelRequestError(f"API request failed: {exc}") from exc
             except (ValueError, TypeError) as exc:
                 raise BinotelRequestError("API returned invalid JSON") from exc
-            finally:
-                with self._request_lock:
-                    self._last_request_at = time.monotonic()
-
         raise BinotelRequestError("API request failed after all retries")
 
     def _throttle(self) -> None:
         gap = self.config.throttle_ms / 1_000
         if gap <= 0:
             return
-        with self._request_lock:
-            if self._last_request_at is None:
-                return
-            remaining = gap - (time.monotonic() - self._last_request_at)
-        if remaining > 0:
-            time.sleep(remaining)
+        with self._throttle_lock:
+            remaining = self._next_request_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+            self._next_request_at = time.monotonic() + gap
 
     def _retry_sleep(self, attempt: int) -> None:
         base = min(
@@ -198,7 +212,7 @@ class BinotelClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> BinotelClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:

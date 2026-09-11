@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import copy
 from math import isfinite
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from pydantic import BaseModel
 
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from .client import BinotelClient
 
 T = TypeVar("T", bound=BaseModel)
-ResourceT = TypeVar("ResourceT", bound="BaseResource")
 
 
 def _collection(model: type[T], value: Any) -> list[T]:
@@ -76,6 +75,38 @@ def _numeric(params: dict[str, Any], key: str, *, required: bool = False) -> Non
         raise BinotelValidationError(f"{key} must be numeric")
 
 
+def _validate_customer(params: dict[str, Any]) -> None:
+    name = _require(params, "name")
+    if not isinstance(name, str):
+        raise BinotelValidationError("name must be a string")
+    numbers = params.get("numbers")
+    if numbers is not None:
+        if not isinstance(numbers, list):
+            raise BinotelValidationError("numbers must be a list")
+        for number in numbers:
+            if not isinstance(number, str) or len(number) != 10:
+                raise BinotelValidationError("each number must be a 10-character string")
+    email = params.get("email")
+    if email is not None and (not isinstance(email, str) or "@" not in email):
+        raise BinotelValidationError("email must be a valid email address")
+    description = params.get("description")
+    if description is not None and not isinstance(description, str):
+        raise BinotelValidationError("description must be a string")
+    assigned = params.get("assignedToEmployee")
+    if assigned is not None:
+        if not isinstance(assigned, dict):
+            raise BinotelValidationError("assignedToEmployee must be an object")
+        _numeric(assigned, "internalNumber")
+        _numeric(assigned, "id")
+    labels = params.get("labels")
+    if labels is not None:
+        if not isinstance(labels, dict):
+            raise BinotelValidationError("labels must be an object")
+        _numeric(labels, "id")
+        if labels.get("name") is not None and not isinstance(labels["name"], str):
+            raise BinotelValidationError("labels.name must be a string")
+
+
 class BaseResource:
     model: str
 
@@ -83,8 +114,8 @@ class BaseResource:
         self.client = client
         self._cache_seconds: int | None = None
 
-    def cache(self: ResourceT, seconds: int = -1) -> ResourceT:
-        """Return a copy whose next resource call uses the requested cache lifetime."""
+    def cache(self, seconds: int = -1) -> Self:
+        """Return a copy whose resource calls use the requested cache lifetime."""
         if seconds < -1:
             raise BinotelValidationError("cache seconds must be -1 or greater")
         resource = copy(self)
@@ -99,7 +130,7 @@ class BaseResource:
         response_key: str | None = None,
         cache_seconds: int | None = None,
     ) -> Any:
-        effective_cache = self._cache_seconds if cache_seconds is None else cache_seconds
+        effective_cache = cache_seconds if self._cache_seconds is None else self._cache_seconds
         return self.client.request(
             f"{self.model}/{endpoint}",
             params,
@@ -156,11 +187,11 @@ class Customers(BaseResource):
         )
 
     def create(self, params: dict[str, Any]) -> int:
-        self._validate_customer(params)
+        _validate_customer(params)
         return int(self._request("create", params, response_key="customerID"))
 
     def update(self, params: dict[str, Any]) -> None:
-        self._validate_customer(params)
+        _validate_customer(params)
         self._request("update", params)
 
     def delete(self, customer_id: int) -> None:
@@ -168,34 +199,6 @@ class Customers(BaseResource):
 
     def list_of_labels(self) -> list[LabelData]:
         return self._models("listOfLabels", LabelData, response_key="listOfLabels")
-
-    @staticmethod
-    def _validate_customer(params: dict[str, Any]) -> None:
-        name = _require(params, "name")
-        if not isinstance(name, str):
-            raise BinotelValidationError("name must be a string")
-        for number in params.get("numbers", []):
-            if not isinstance(number, str) or len(number) != 10:
-                raise BinotelValidationError("each number must be a 10-character string")
-        email = params.get("email")
-        if email is not None and (not isinstance(email, str) or "@" not in email):
-            raise BinotelValidationError("email must be a valid email address")
-        description = params.get("description")
-        if description is not None and not isinstance(description, str):
-            raise BinotelValidationError("description must be a string")
-        assigned = params.get("assignedToEmployee")
-        if assigned is not None:
-            if not isinstance(assigned, dict):
-                raise BinotelValidationError("assignedToEmployee must be an object")
-            _numeric(assigned, "internalNumber")
-            _numeric(assigned, "id")
-        labels = params.get("labels")
-        if labels is not None:
-            if not isinstance(labels, dict):
-                raise BinotelValidationError("labels must be an object")
-            _numeric(labels, "id")
-            if labels.get("name") is not None and not isinstance(labels["name"], str):
-                raise BinotelValidationError("labels.name must be a string")
 
 
 class Stats(BaseResource):

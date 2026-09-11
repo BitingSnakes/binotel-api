@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urlparse
 
@@ -29,6 +31,9 @@ class FakeHttpClient:
 
     def close(self) -> None:
         self.closed = True
+
+    def __bool__(self) -> bool:
+        return False
 
 
 def config(**overrides: object) -> BinotelConfig:
@@ -87,13 +92,58 @@ def test_custom_resource_cache_duration_is_chainable() -> None:
     assert requests == 1
 
 
+def test_custom_cache_duration_overrides_endpoint_default() -> None:
+    requests = 0
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeResponse:
+        nonlocal requests
+        requests += 1
+        return FakeResponse(200, {"callDetails": []})
+
+    with BinotelClient(config(), http_client=FakeHttpClient(handler)) as client:
+        stats = client.stats.cache(0)
+        assert stats.online_calls() == []
+        assert stats.online_calls() == []
+
+    assert requests == 2
+
+
+def test_sync_cache_coalesces_concurrent_requests() -> None:
+    requests: list[str] = []
+
+    def handler(url: str, payload: dict[str, Any]) -> FakeResponse:
+        requests.append(url)
+        time.sleep(0.02)
+        return FakeResponse(200, {"callDetails": []})
+
+    with (
+        BinotelClient(config(), http_client=FakeHttpClient(handler)) as client,
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        results = list(executor.map(lambda _: client.stats.online_calls(), range(2)))
+
+    assert results == [[], []]
+    assert len(requests) == 1
+
+
 def test_validation_happens_before_request() -> None:
     fake = FakeHttpClient(lambda _url, _payload: FakeResponse(200, {}))
-    with BinotelClient(config(), http_client=fake) as client:
-        with pytest.raises(BinotelValidationError, match="10-character"):
-            client.calls.internal_number_to_external_number(
-                {"internalNumber": 801, "externalNumber": "123"}
-            )
+    with (
+        BinotelClient(config(), http_client=fake) as client,
+        pytest.raises(BinotelValidationError, match="10-character"),
+    ):
+        client.calls.internal_number_to_external_number(
+            {"internalNumber": 801, "externalNumber": "123"}
+        )
+
+
+def test_customer_numbers_must_be_a_list() -> None:
+    fake = FakeHttpClient(lambda _url, _payload: FakeResponse(200, {}))
+    with (
+        BinotelClient(config(), http_client=fake) as client,
+        pytest.raises(BinotelValidationError, match="numbers must be a list"),
+    ):
+        client.customers.create({"name": "Acme", "numbers": "0671234567"})
 
 
 def test_hangup_uses_correct_endpoint() -> None:
@@ -111,9 +161,11 @@ def test_hangup_uses_correct_endpoint() -> None:
 
 def test_non_retryable_http_error_is_wrapped() -> None:
     fake = FakeHttpClient(lambda _url, _payload: FakeResponse(400, {"error": "bad"}))
-    with BinotelClient(config(), http_client=fake) as client:
-        with pytest.raises(BinotelRequestError, match="HTTP status 400"):
-            client.customers.list()
+    with (
+        BinotelClient(config(), http_client=fake) as client,
+        pytest.raises(BinotelRequestError, match="HTTP status 400"),
+    ):
+        client.customers.list()
 
 
 def test_environment_defaults_can_be_loaded(monkeypatch: pytest.MonkeyPatch) -> None:

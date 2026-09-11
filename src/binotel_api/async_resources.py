@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from copy import copy
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from pydantic import BaseModel
 
 from .exceptions import BinotelRequestError, BinotelValidationError
-from .resources import _collection, _nonnegative_number, _numeric, _require, _string_size
+from .resources import (
+    _collection,
+    _nonnegative_number,
+    _numeric,
+    _require,
+    _string_size,
+    _validate_customer,
+)
 from .schemas import (
     CustomerData,
     LabelData,
@@ -22,7 +29,6 @@ if TYPE_CHECKING:
     from .async_client import AsyncBinotelClient
 
 T = TypeVar("T", bound=BaseModel)
-ResourceT = TypeVar("ResourceT", bound="AsyncBaseResource")
 
 
 class AsyncBaseResource:
@@ -32,7 +38,7 @@ class AsyncBaseResource:
         self.client = client
         self._cache_seconds: int | None = None
 
-    def cache(self: ResourceT, seconds: int = -1) -> ResourceT:
+    def cache(self, seconds: int = -1) -> Self:
         """Return a copy whose resource calls use the requested cache lifetime."""
         if seconds < -1:
             raise BinotelValidationError("cache seconds must be -1 or greater")
@@ -48,7 +54,7 @@ class AsyncBaseResource:
         response_key: str | None = None,
         cache_seconds: int | None = None,
     ) -> Any:
-        effective_cache = self._cache_seconds if cache_seconds is None else cache_seconds
+        effective_cache = cache_seconds if self._cache_seconds is None else self._cache_seconds
         return await self.client.request(
             f"{self.model}/{endpoint}",
             params,
@@ -103,15 +109,11 @@ class AsyncCustomers(AsyncBaseResource):
         )
 
     async def create(self, params: dict[str, Any]) -> int:
-        from .resources import Customers
-
-        Customers._validate_customer(params)
+        _validate_customer(params)
         return int(await self._request("create", params, response_key="customerID"))
 
     async def update(self, params: dict[str, Any]) -> None:
-        from .resources import Customers
-
-        Customers._validate_customer(params)
+        _validate_customer(params)
         await self._request("update", params)
 
     async def delete(self, customer_id: int) -> None:
