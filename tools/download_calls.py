@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -33,6 +34,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from binotel_api import AsyncBinotel, BinotelConfig
 
 _RATE_LIMIT_CODE = 106
+_LOGGER = logging.getLogger("binotel-downloader")
 _CONTENT_TYPE_SUFFIXES = {
     "audio/mpeg": ".mp3",
     "audio/mp3": ".mp3",
@@ -89,7 +91,15 @@ class ApiRequester:
                 code = _optional_int(result.get("code"))
                 message = str(result.get("message", "unknown error"))
                 if code == _RATE_LIMIT_CODE and attempt < self.retries:
-                    await asyncio.sleep(max(5.2, self.delay))
+                    retry_delay = max(5.2, self.delay)
+                    _LOGGER.warning(
+                        "API rate limit reached; retrying %s in %.1f seconds (%d/%d)",
+                        method,
+                        retry_delay,
+                        attempt,
+                        self.retries,
+                    )
+                    await asyncio.sleep(retry_delay)
                     continue
                 raise ApiResponseError(code, message)
 
@@ -233,6 +243,7 @@ async def _download_call(
         if overwrite or not metadata_path.exists():
             await asyncio.to_thread(_atomic_json_write, metadata_path, call)
             counters.metadata_written += 1
+            _LOGGER.debug("Call %d: wrote metadata to %s", call_id, metadata_path)
 
         if metadata_only:
             return
@@ -240,6 +251,7 @@ async def _download_call(
         recording_directory = output / day.isoformat() / "recordings"
         if not overwrite and _existing_recording(recording_directory, call_id) is not None:
             counters.recordings_existing += 1
+            _LOGGER.debug("Call %d: recording already exists", call_id)
             return
 
         try:
@@ -249,13 +261,16 @@ async def _download_call(
             url = _recording_url(record_response)
             if url is None:
                 counters.recordings_unavailable += 1
+                _LOGGER.debug("Call %d: recording is unavailable", call_id)
                 return
-            await asyncio.to_thread(
+            destination = await asyncio.to_thread(
                 _download_recording, url, recording_directory, call_id, http_timeout
             )
             counters.recordings_downloaded += 1
+            _LOGGER.debug("Call %d: downloaded recording to %s", call_id, destination)
         except (ApiResponseError, RuntimeError) as exc:
             counters.recording_errors += 1
+            _LOGGER.warning("Call %d: %s", call_id, exc)
             async with error_lock:
                 await asyncio.to_thread(_append_error, output / "errors.jsonl", day, call_id, exc)
 
@@ -272,8 +287,10 @@ async def _download_day(
     metadata_only: bool,
     overwrite: bool,
     http_timeout: int,
+    progress_every: int,
     seen: set[int],
 ) -> None:
+    _LOGGER.info("Fetching calls for %s", day.isoformat())
     start_time, stop_time = _day_timestamps(day, timezone)
     response = await requester.request(
         "stats/list-of-calls-for-period",
@@ -286,10 +303,11 @@ async def _download_day(
         if call_id not in seen:
             seen.add(call_id)
             unique_calls.append(call)
-    print(f"{day.isoformat()}: {len(unique_calls)} new call records")
+    total = len(unique_calls)
+    _LOGGER.info("%s: found %d new call records", day.isoformat(), total)
 
-    await asyncio.gather(
-        *(
+    tasks = [
+        asyncio.create_task(
             _download_call(
                 requester,
                 day,
@@ -302,9 +320,22 @@ async def _download_day(
                 overwrite=overwrite,
                 http_timeout=http_timeout,
             )
-            for call in unique_calls
         )
-    )
+        for call in unique_calls
+    ]
+    for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+        await task
+        if completed % progress_every == 0 or completed == total:
+            _LOGGER.info(
+                "%s: processed %d/%d calls (downloaded=%d, existing=%d, unavailable=%d, errors=%d)",
+                day.isoformat(),
+                completed,
+                total,
+                counters.recordings_downloaded,
+                counters.recordings_existing,
+                counters.recordings_unavailable,
+                counters.recording_errors,
+            )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -358,6 +389,18 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum concurrent call downloads (default: 15)",
     )
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=10,
+        help="log progress after this many calls (default: 10)",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+        help="logging verbosity (default: INFO)",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=30,
@@ -372,6 +415,8 @@ async def _async_main(args: argparse.Namespace) -> int:
         raise SystemExit("--api-delay must not be negative")
     if args.concurrency <= 0:
         raise SystemExit("--concurrency must be positive")
+    if args.progress_every <= 0:
+        raise SystemExit("--progress-every must be positive")
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
 
@@ -413,6 +458,14 @@ async def _async_main(args: argparse.Namespace) -> int:
     )
 
     started_at = datetime.now().astimezone()
+    _LOGGER.info(
+        "Starting download: %s through %s, output=%s, concurrency=%d, metadata_only=%s",
+        args.start,
+        end,
+        output,
+        args.concurrency,
+        args.metadata_only,
+    )
     async with AsyncBinotel(config) as client:
         requester = ApiRequester(client, args.api_delay)
         for day in _date_range(args.start, end):
@@ -427,6 +480,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 metadata_only=args.metadata_only,
                 overwrite=args.overwrite,
                 http_timeout=args.timeout,
+                progress_every=args.progress_every,
                 seen=seen,
             )
 
@@ -441,13 +495,27 @@ async def _async_main(args: argparse.Namespace) -> int:
         **{name: getattr(counters, name) for name in counters.__dataclass_fields__},
     }
     await asyncio.to_thread(_atomic_json_write, output / "manifest.json", manifest)
-    print(json.dumps(manifest, indent=2))
+    _LOGGER.info(
+        "Finished: calls=%d, metadata=%d, downloaded=%d, existing=%d, unavailable=%d, errors=%d",
+        counters.calls_found,
+        counters.metadata_written,
+        counters.recordings_downloaded,
+        counters.recordings_existing,
+        counters.recordings_unavailable,
+        counters.recording_errors,
+    )
+    _LOGGER.debug("Manifest:\n%s", json.dumps(manifest, indent=2))
     return 0
 
 
 def main() -> int:
     """Parse arguments and run the asynchronous downloader."""
     args = _parser().parse_args()
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     try:
         return asyncio.run(_async_main(args))
     except KeyboardInterrupt:
