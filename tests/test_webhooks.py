@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.types import Message, Scope
 
-from binotel_api.webhooks import ReceivedTheCall, create_webhook_router
+from binotel_api.webhooks import ReceivedTheCall, WebhookConfig, create_webhook_router
 
 
 class CaptureReceivedCall(ReceivedTheCall):
@@ -22,7 +22,11 @@ def make_app(*, custom_action: bool = True, allowed_ip: str = "testclient") -> F
 
 
 def post_json(
-    app: FastAPI, payload: dict[str, Any], *, client_ip: str = "testclient"
+    app: FastAPI,
+    payload: dict[str, Any],
+    *,
+    client_ip: str = "testclient",
+    forwarded_for: str | None = None,
 ) -> tuple[int, Any]:
     body = json.dumps(payload).encode()
     incoming: list[Message] = [
@@ -38,6 +42,10 @@ def post_json(
     async def send(message: Message) -> None:
         outgoing.append(message)
 
+    headers = [(b"content-type", b"application/json")]
+    if forwarded_for is not None:
+        headers.append((b"x-forwarded-for", forwarded_for.encode()))
+
     scope = cast(
         Scope,
         {
@@ -50,7 +58,7 @@ def post_json(
             "raw_path": b"/binotel-api/webhook",
             "query_string": b"",
             "root_path": "",
-            "headers": [(b"content-type", b"application/json")],
+            "headers": headers,
             "client": (client_ip, 1234),
             "server": ("testserver", 80),
         },
@@ -130,3 +138,88 @@ def test_webhook_rejects_unapproved_ip() -> None:
     )
 
     assert status == 403
+
+
+def test_webhook_accepts_programmatic_allowlist() -> None:
+    app = FastAPI()
+    app.include_router(
+        create_webhook_router(
+            config=WebhookConfig(allowed_ips=frozenset({"203.0.113.10"})),
+        )
+    )
+
+    status, _ = post_json(
+        app,
+        {"requestType": "apiCallCompleted", "callDetails": []},
+        client_ip="203.0.113.10",
+    )
+
+    assert status == 200
+
+
+def test_webhook_loads_allowlist_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "BINOTEL_WEBHOOK_ALLOWED_IPS",
+        " 203.0.113.10, 198.51.100.20 ",
+    )
+    app = FastAPI()
+    app.include_router(create_webhook_router())
+
+    accepted, _ = post_json(
+        app,
+        {"requestType": "apiCallCompleted", "callDetails": []},
+        client_ip="198.51.100.20",
+    )
+    rejected, _ = post_json(
+        app,
+        {"requestType": "apiCallCompleted", "callDetails": []},
+        client_ip="192.0.2.1",
+    )
+
+    assert accepted == 200
+    assert rejected == 403
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_webhook_config_parses_true_environment_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("BINOTEL_WEBHOOK_TRUST_FORWARDED_FOR", value)
+
+    assert WebhookConfig.from_env().trust_forwarded_for is True
+
+
+def test_environment_config_can_trust_forwarded_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BINOTEL_WEBHOOK_ALLOWED_IPS", "203.0.113.10")
+    monkeypatch.setenv("BINOTEL_WEBHOOK_TRUST_FORWARDED_FOR", "true")
+    app = FastAPI()
+    app.include_router(create_webhook_router())
+
+    status, _ = post_json(
+        app,
+        {"requestType": "apiCallCompleted", "callDetails": []},
+        client_ip="192.0.2.1",
+        forwarded_for="203.0.113.10",
+    )
+
+    assert status == 200
+
+
+def test_explicit_allowlist_overrides_configuration() -> None:
+    app = FastAPI()
+    app.include_router(
+        create_webhook_router(
+            config=WebhookConfig(allowed_ips=frozenset({"192.0.2.1"})),
+            allowed_ips={"203.0.113.10"},
+        )
+    )
+
+    accepted, _ = post_json(
+        app,
+        {"requestType": "apiCallCompleted", "callDetails": []},
+        client_ip="203.0.113.10",
+    )
+
+    assert accepted == 200

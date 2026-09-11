@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Generic, TypeVar
+import os
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from typing import Any, Generic, Self, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ValidationError
@@ -49,6 +51,44 @@ ALLOWED_IPS = frozenset(
         "45.91.130.36",
     }
 )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookConfig:
+    """Security settings for the Binotel webhook router."""
+
+    allowed_ips: Collection[str] = ALLOWED_IPS
+    trust_forwarded_for: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed_ips", frozenset(self.allowed_ips))
+
+    @classmethod
+    def from_env(cls) -> Self:
+        """Load webhook settings from environment variables."""
+        raw_ips = os.getenv("BINOTEL_WEBHOOK_ALLOWED_IPS")
+        allowed_ips = (
+            ALLOWED_IPS
+            if raw_ips is None
+            else frozenset(value.strip() for value in raw_ips.split(",") if value.strip())
+        )
+        return cls(
+            allowed_ips=allowed_ips,
+            trust_forwarded_for=_env_bool("BINOTEL_WEBHOOK_TRUST_FORWARDED_FOR", False),
+        )
+
 
 PayloadT = TypeVar("PayloadT", bound=BaseModel)
 
@@ -102,10 +142,14 @@ DEFAULT_ACTIONS: dict[str, type[WebhookAction[Any]]] = {
 def create_webhook_router(
     actions: Mapping[str, type[WebhookAction[Any]]] | None = None,
     *,
-    allowed_ips: set[str] | frozenset[str] | None = None,
-    trust_forwarded_for: bool = False,
+    config: WebhookConfig | None = None,
+    allowed_ips: Collection[str] | None = None,
+    trust_forwarded_for: bool | None = None,
 ) -> APIRouter:
     """Create the ``/binotel-api/webhook`` router.
+
+    Settings are loaded from the environment by default. Explicit arguments
+    override values from ``config`` or the environment.
 
     ``trust_forwarded_for`` should only be enabled behind a trusted proxy that
     replaces, rather than appends untrusted values to, ``X-Forwarded-For``.
@@ -113,12 +157,16 @@ def create_webhook_router(
 
     router = APIRouter(prefix="/binotel-api", tags=["binotel"])
     action_map = dict(DEFAULT_ACTIONS if actions is None else actions)
-    ip_allowlist = ALLOWED_IPS if allowed_ips is None else frozenset(allowed_ips)
+    settings = WebhookConfig.from_env() if config is None else config
+    ip_allowlist = settings.allowed_ips if allowed_ips is None else frozenset(allowed_ips)
+    use_forwarded_for = (
+        settings.trust_forwarded_for if trust_forwarded_for is None else trust_forwarded_for
+    )
 
     @router.post("/webhook")
     async def webhook(request: Request) -> dict[str, Any]:
         remote_ip = request.client.host if request.client else ""
-        if trust_forwarded_for and request.headers.get("x-forwarded-for"):
+        if use_forwarded_for and request.headers.get("x-forwarded-for"):
             remote_ip = request.headers["x-forwarded-for"].split(",", 1)[0].strip()
         if remote_ip not in ip_allowlist:
             raise HTTPException(status_code=403, detail="Webhook source is not allowed")

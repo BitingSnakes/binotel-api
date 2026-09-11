@@ -111,7 +111,7 @@ This section requires the `webhooks` installation extra shown above.
 
 ```python
 from fastapi import FastAPI
-from binotel_api.webhooks import ReceivedTheCall, create_webhook_router
+from binotel_api.webhooks import ReceivedTheCall, WebhookConfig, create_webhook_router
 
 
 class SaveReceivedCall(ReceivedTheCall):
@@ -121,15 +121,28 @@ class SaveReceivedCall(ReceivedTheCall):
 
 
 app = FastAPI()
+webhook_config = WebhookConfig(
+    allowed_ips={"203.0.113.10", "203.0.113.11"},
+)
 app.include_router(
     create_webhook_router(
         actions={"receivedTheCall": SaveReceivedCall},
+        config=webhook_config,
     )
 )
 ```
 
-By default, webhook requests are accepted only from Binotel's IP allowlist. If
-the application is behind a trusted reverse proxy, enable
+By default, webhook requests are accepted only from Binotel's built-in IP
+allowlist. It can also be replaced through environment variables:
+
+```dotenv
+BINOTEL_WEBHOOK_ALLOWED_IPS=203.0.113.10,203.0.113.11
+BINOTEL_WEBHOOK_TRUST_FORWARDED_FOR=false
+```
+
+The `allowed_ips` and `trust_forwarded_for` arguments to
+`create_webhook_router()` remain available as per-router overrides. If the
+application is behind a trusted reverse proxy, enable
 `trust_forwarded_for=True` only when that proxy replaces the incoming
 `X-Forwarded-For` header.
 
